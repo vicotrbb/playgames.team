@@ -10,7 +10,7 @@ import {
 import { io, Socket } from "socket.io-client";
 import { GameState, Player, GameplayData, RoundResults } from "./socket";
 
-const SOCKET_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
+const SOCKET_URL = process.env.NEXT_PUBLIC_SERVER_URL || "http://localhost:3001";
 
 interface SocketContextType {
   socket: Socket | null;
