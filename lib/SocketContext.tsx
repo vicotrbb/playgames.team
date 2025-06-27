@@ -8,7 +8,61 @@ import {
   ReactNode,
 } from "react";
 import { io, Socket } from "socket.io-client";
-import { GameState, Player, GameplayData, RoundResults } from "./socket";
+// Updated GameState interface to support all game types
+export interface Player {
+  id: string;
+  nickname: string;
+  score: number;
+  isHost: boolean;
+  isOnline: boolean;
+}
+
+export interface GameState {
+  code: string;
+  gameType: "guessio" | "emojistory" | "twotruths";
+  players: Player[];
+  status: "lobby" | "playing" | "completed";
+  currentRound: number;
+  maxPlayers: number;
+  settings: {
+    maxRounds: number;
+    guessingTimeLimit?: number;
+    timePerTurn?: number;
+  };
+}
+
+export interface GameplayData {
+  currentRound: number;
+  prompterId: string;
+  prompterNickname: string;
+  gamePhase:
+    | "waiting_for_prompt"
+    | "generating_image"
+    | "guessing"
+    | "revealing"
+    | "completed";
+  imageUrl?: string;
+  timeRemaining?: number;
+  guessCount?: number;
+  totalGuessers?: number;
+}
+
+export interface RoundResults {
+  round: number;
+  prompt: string;
+  imageUrl: string;
+  guesses: Array<{
+    playerId: string;
+    nickname: string;
+    guess: string;
+    points: number;
+  }>;
+  scores: Array<{
+    playerId: string;
+    nickname: string;
+    totalScore: number;
+  }>;
+}
 
 const SOCKET_URL = process.env.NEXT_PUBLIC_SERVER_URL || "http://localhost:3001";
 
@@ -20,13 +74,18 @@ interface SocketContextType {
   error: string | null;
   gameplayData: GameplayData | null;
   roundResults: RoundResults | null;
-  createGame: (nickname: string) => Promise<boolean>;
+  createGame: (nickname: string, gameType?: "guessio" | "emojistory" | "twotruths") => Promise<boolean>;
   joinGame: (gameCode: string, nickname: string) => Promise<boolean>;
   startGame: () => void;
   leaveGame: () => void;
   sendChatMessage: (message: string) => void;
   submitPrompt: (prompt: string) => void;
   submitGuess: (guess: string) => void;
+  submitEmojis: (emojis: string) => void;
+  submitStoryInterpretation: (interpretation: string) => void;
+  submitVote: (votedForPlayerId: string) => void;
+  submitStatements: (statements: Array<{ text: string; isLie: boolean }>) => void;
+  submitTwoTruthsVote: (statementId: string) => void;
 }
 
 const SocketContext = createContext<SocketContextType | null>(null);
@@ -323,10 +382,10 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  const createGame = async (nickname: string): Promise<boolean> => {
+  const createGame = async (nickname: string, gameType: "guessio" | "emojistory" | "twotruths" = "guessio"): Promise<boolean> => {
     try {
       setError(null);
-      console.log("🎮 Creating game for:", nickname);
+      console.log("🎮 Creating game for:", nickname, "type:", gameType);
 
       const response = await fetch(`${SOCKET_URL}/api/create-game`, {
         method: "POST",
@@ -334,7 +393,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
           "Content-Type": "application/json",
         },
         credentials: "include",
-        body: JSON.stringify({ hostNickname: nickname }),
+        body: JSON.stringify({ hostNickname: nickname, gameType }),
       });
 
       if (!response.ok) {
@@ -480,6 +539,36 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const submitEmojis = (emojis: string) => {
+    if (socket && emojis.trim()) {
+      socket.emit("submitEmojis", { emojis: emojis.trim() });
+    }
+  };
+
+  const submitStoryInterpretation = (interpretation: string) => {
+    if (socket && interpretation.trim()) {
+      socket.emit("submitStoryInterpretation", { interpretation: interpretation.trim() });
+    }
+  };
+
+  const submitVote = (votedForPlayerId: string) => {
+    if (socket && votedForPlayerId) {
+      socket.emit("submitVote", { votedForPlayerId });
+    }
+  };
+
+  const submitStatements = (statements: Array<{ text: string; isLie: boolean }>) => {
+    if (socket && statements.length === 3) {
+      socket.emit("submitStatements", { statements });
+    }
+  };
+
+  const submitTwoTruthsVote = (statementId: string) => {
+    if (socket && statementId) {
+      socket.emit("submitTwoTruthsVote", { statementId });
+    }
+  };
+
   return (
     <SocketContext.Provider
       value={{
@@ -497,6 +586,11 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         sendChatMessage,
         submitPrompt,
         submitGuess,
+        submitEmojis,
+        submitStoryInterpretation,
+        submitVote,
+        submitStatements,
+        submitTwoTruthsVote,
       }}
     >
       {children}

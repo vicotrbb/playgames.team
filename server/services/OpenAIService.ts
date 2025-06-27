@@ -58,9 +58,12 @@ export class OpenAIService {
     try {
       console.log(`🎨 Generating image for prompt: "${prompt}"`);
 
+      // Modify the prompt to make it more challenging by adding creative interpretation instructions
+      const enhancedPrompt = `Create an abstract, artistic, and stylized interpretation of: "${prompt.trim()}". Make it creative and interpretative rather than literal - use artistic styles, unusual angles, creative compositions, or symbolic representations. The image should capture the essence or mood rather than being a direct representation. Add artistic flair, interesting lighting, or creative visual metaphors.`;
+
       const response = await this.openai.images.generate({
         model: "dall-e-3",
-        prompt: prompt.trim(),
+        prompt: enhancedPrompt,
         n: 1,
         size: "1024x1024",
         quality: "standard",

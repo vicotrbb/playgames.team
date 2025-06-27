@@ -1,7 +1,11 @@
 import {
   Game,
+  GameType,
   Player,
   GameRound,
+  GuessioRound,
+  EmojiStoryRound,
+  TwoTruthsRound,
   JoinGameResult,
   CreateGameResult,
 } from "../types/Game";
@@ -24,7 +28,8 @@ export class GameService {
   async createGame(
     gameCode: string,
     hostId: string,
-    hostNickname: string
+    hostNickname: string,
+    gameType: GameType = "guessio"
   ): Promise<Game> {
     if (await this.redisService.gameExists(gameCode)) {
       throw new Error("Game code already exists");
@@ -41,21 +46,25 @@ export class GameService {
 
     const game: Game = {
       code: gameCode,
+      gameType,
       players: new Map([[hostId, host]]),
       rounds: [],
       currentRound: 0,
       status: "lobby",
-      maxPlayers: 50,
+      maxPlayers: gameType === "emojistory" ? 20 : gameType === "twotruths" ? 10 : 50, // Different games have different optimal player counts
       createdAt: new Date(),
       updatedAt: new Date(),
       settings: {
-        maxRounds: 10, // Default to 10 rounds or number of players
-        guessingTimeLimit: 15, // 15 seconds
+        maxRounds: gameType === "emojistory" ? 3 : gameType === "twotruths" ? 10 : 10, // TwoTruths can have more rounds since they're shorter
+        guessingTimeLimit: gameType === "guessio" ? 15 : undefined,
+        timePerTurn: gameType === "emojistory" ? 30 : undefined,
+        timeToSubmitStatements: gameType === "twotruths" ? 60 : undefined,
+        timeToVote: gameType === "twotruths" ? 30 : undefined,
       },
     };
 
     await this.redisService.saveGame(game);
-    console.log(`🎮 Game ${gameCode} created by ${hostNickname}`);
+    console.log(`🎮 ${gameType} game ${gameCode} created by ${hostNickname}`);
 
     return game;
   }
@@ -186,17 +195,38 @@ export class GameService {
     game.status = "playing";
     game.updatedAt = new Date();
 
-    const firstRound = this.createNewRound(1, game.players);
+    const firstRound = this.createNewRound(1, game.players, game.gameType);
     game.rounds.push(firstRound);
     game.currentRound = 1;
 
     await this.redisService.saveGame(game);
 
-    await this.redisService.publishToGame(gameCode, "gameStarted", {
-      round: 1,
-      prompterId: firstRound.prompterId,
-      totalRounds: game.settings.maxRounds,
-    });
+    if (game.gameType === "guessio") {
+      const guessioRound = firstRound as GuessioRound;
+      await this.redisService.publishToGame(gameCode, "gameStarted", {
+        round: 1,
+        prompterId: guessioRound.prompterId,
+        totalRounds: game.settings.maxRounds,
+      });
+    } else if (game.gameType === "emojistory") {
+      const emojiRound = firstRound as EmojiStoryRound;
+      await this.redisService.publishToGame(gameCode, "gameStarted", {
+        round: 1,
+        currentTurnPlayerId: emojiRound.currentTurnPlayerId,
+        currentTurnNickname: game.players.get(emojiRound.currentTurnPlayerId!)?.nickname,
+        totalRounds: game.settings.maxRounds,
+        timePerTurn: emojiRound.timePerTurn,
+      });
+    } else if (game.gameType === "twotruths") {
+      const twoTruthsRound = firstRound as TwoTruthsRound;
+      await this.redisService.publishToGame(gameCode, "gameStarted", {
+        round: 1,
+        currentPresenterPlayerId: twoTruthsRound.currentPresenterPlayerId,
+        currentPresenterNickname: game.players.get(twoTruthsRound.currentPresenterPlayerId)?.nickname,
+        totalRounds: game.settings.maxRounds,
+        timeToSubmit: twoTruthsRound.timeToSubmit,
+      });
+    }
 
     console.log(
       `🚀 Game ${gameCode} started with ${game.players.size} players`
@@ -229,19 +259,48 @@ export class GameService {
 
   private createNewRound(
     roundNumber: number,
-    players: Map<string, Player>
+    players: Map<string, Player>,
+    gameType: GameType
   ): GameRound {
     const playerIds = Array.from(players.keys());
-    const prompterIndex = (roundNumber - 1) % playerIds.length;
-    const prompterId = playerIds[prompterIndex];
 
-    return {
-      roundNumber,
-      prompterId,
-      guesses: new Map(),
-      scores: new Map(),
-      status: "waiting_for_prompt",
-    };
+    if (gameType === "guessio") {
+      const prompterIndex = (roundNumber - 1) % playerIds.length;
+      const prompterId = playerIds[prompterIndex];
+
+      return {
+        roundNumber,
+        prompterId,
+        guesses: new Map(),
+        scores: new Map(),
+        status: "waiting_for_prompt",
+      } as GuessioRound;
+    } else if (gameType === "emojistory") {
+      return {
+        roundNumber,
+        storyContributions: [],
+        storyInterpretations: new Map(),
+        votes: new Map(),
+        scores: new Map(),
+        status: "story_building",
+        currentTurnPlayerId: playerIds[0], // Start with first player
+        timePerTurn: 30,
+      } as EmojiStoryRound;
+    } else { // twotruths
+      const presenterIndex = (roundNumber - 1) % playerIds.length;
+      const presenterId = playerIds[presenterIndex];
+
+      return {
+        roundNumber,
+        currentPresenterPlayerId: presenterId,
+        statements: [],
+        votes: new Map(),
+        scores: new Map(),
+        status: "waiting_for_statements",
+        timeToSubmit: 60,
+        timeToVote: 30,
+      } as TwoTruthsRound;
+    }
   }
 
   private serializePlayer(player: Player): any {
@@ -479,17 +538,38 @@ export class GameService {
     }
 
     game.currentRound += 1;
-    const nextRound = this.createNewRound(game.currentRound, game.players);
+    const nextRound = this.createNewRound(game.currentRound, game.players, game.gameType);
     game.rounds.push(nextRound);
 
     await this.redisService.saveGame(game);
 
-    await this.redisService.publishToGame(gameCode, "nextRound", {
-      round: game.currentRound,
-      prompterId: nextRound.prompterId,
-      prompterNickname: game.players.get(nextRound.prompterId)?.nickname,
-      totalRounds: game.settings.maxRounds,
-    });
+    if (game.gameType === "guessio") {
+      const guessioRound = nextRound as GuessioRound;
+      await this.redisService.publishToGame(gameCode, "nextRound", {
+        round: game.currentRound,
+        prompterId: guessioRound.prompterId,
+        prompterNickname: game.players.get(guessioRound.prompterId)?.nickname,
+        totalRounds: game.settings.maxRounds,
+      });
+    } else if (game.gameType === "emojistory") {
+      const emojiRound = nextRound as EmojiStoryRound;
+      await this.redisService.publishToGame(gameCode, "nextRound", {
+        round: game.currentRound,
+        currentTurnPlayerId: emojiRound.currentTurnPlayerId,
+        currentTurnNickname: game.players.get(emojiRound.currentTurnPlayerId!)?.nickname,
+        totalRounds: game.settings.maxRounds,
+        timePerTurn: emojiRound.timePerTurn,
+      });
+    } else if (game.gameType === "twotruths") {
+      const twoTruthsRound = nextRound as TwoTruthsRound;
+      await this.redisService.publishToGame(gameCode, "nextRound", {
+        round: game.currentRound,
+        currentPresenterPlayerId: twoTruthsRound.currentPresenterPlayerId,
+        currentPresenterNickname: game.players.get(twoTruthsRound.currentPresenterPlayerId)?.nickname,
+        totalRounds: game.settings.maxRounds,
+        timeToSubmit: twoTruthsRound.timeToSubmit,
+      });
+    }
 
     console.log(`🔄 Started round ${game.currentRound} for game ${gameCode}`);
   }
@@ -527,5 +607,522 @@ export class GameService {
       await this.redisService.deleteGame(gameCode);
       console.log(`🗑️ Game ${gameCode} data deleted`);
     }, 300000); // 5 minutes delay
+  }
+
+  // EmojiStory specific methods
+  async submitEmojis(
+    gameCode: string,
+    playerId: string,
+    emojis: string
+  ): Promise<boolean> {
+    const game = await this.redisService.getGame(gameCode);
+
+    if (!game || game.gameType !== "emojistory" || game.status !== "playing") {
+      return false;
+    }
+
+    const currentRound = game.rounds[game.currentRound - 1] as EmojiStoryRound;
+    if (!currentRound || currentRound.status !== "story_building") {
+      return false;
+    }
+
+    if (currentRound.currentTurnPlayerId !== playerId) {
+      return false;
+    }
+
+    if (!emojis || emojis.trim().length === 0 || emojis.trim().length > 100) {
+      return false;
+    }
+
+    // Add emoji contribution
+    currentRound.storyContributions.push({
+      playerId,
+      emojis: emojis.trim(),
+      turnOrder: currentRound.storyContributions.length + 1,
+    });
+
+    // Find next player
+    const playerIds = Array.from(game.players.keys());
+    const currentPlayerIndex = playerIds.indexOf(playerId);
+    const nextPlayerIndex = (currentPlayerIndex + 1) % playerIds.length;
+    
+    if (currentRound.storyContributions.length >= playerIds.length) {
+      // All players have contributed, move to interpretation phase
+      currentRound.status = "interpreting";
+      currentRound.currentTurnPlayerId = undefined;
+      
+      await this.redisService.saveGame(game);
+      
+      await this.redisService.publishToGame(gameCode, "storyComplete", {
+        round: game.currentRound,
+        storyContributions: currentRound.storyContributions.map(sc => ({
+          playerId: sc.playerId,
+          nickname: game.players.get(sc.playerId)?.nickname,
+          emojis: sc.emojis,
+          turnOrder: sc.turnOrder,
+        })),
+        timeToInterpret: 60, // 60 seconds to write interpretation
+      });
+
+      // Start interpretation timer
+      setTimeout(async () => {
+        await this.endInterpretationPhase(gameCode);
+      }, 60000);
+    } else {
+      // Move to next player
+      currentRound.currentTurnPlayerId = playerIds[nextPlayerIndex];
+      
+      await this.redisService.saveGame(game);
+      
+      await this.redisService.publishToGame(gameCode, "nextTurn", {
+        round: game.currentRound,
+        currentTurnPlayerId: playerIds[nextPlayerIndex],
+        currentTurnNickname: game.players.get(playerIds[nextPlayerIndex])?.nickname,
+        storyContributions: currentRound.storyContributions.map(sc => ({
+          playerId: sc.playerId,
+          nickname: game.players.get(sc.playerId)?.nickname,
+          emojis: sc.emojis,
+          turnOrder: sc.turnOrder,
+        })),
+        timePerTurn: currentRound.timePerTurn,
+      });
+    }
+
+    console.log(`📚 Emojis submitted by ${playerId} in game ${gameCode}: "${emojis}"`);
+    return true;
+  }
+
+  async submitStoryInterpretation(
+    gameCode: string,
+    playerId: string,
+    interpretation: string
+  ): Promise<boolean> {
+    const game = await this.redisService.getGame(gameCode);
+
+    if (!game || game.gameType !== "emojistory" || game.status !== "playing") {
+      return false;
+    }
+
+    const currentRound = game.rounds[game.currentRound - 1] as EmojiStoryRound;
+    if (!currentRound || currentRound.status !== "interpreting") {
+      return false;
+    }
+
+    if (!interpretation || interpretation.trim().length === 0 || interpretation.trim().length > 500) {
+      return false;
+    }
+
+    currentRound.storyInterpretations.set(playerId, interpretation.trim());
+    
+    await this.redisService.saveGame(game);
+
+    await this.redisService.publishToGame(gameCode, "interpretationReceived", {
+      playerId,
+      interpretationCount: currentRound.storyInterpretations.size,
+      totalPlayers: game.players.size,
+    });
+
+    console.log(`💭 Story interpretation submitted by ${playerId} in game ${gameCode}`);
+
+    // If all players have submitted interpretations, move to voting
+    if (currentRound.storyInterpretations.size >= game.players.size) {
+      await this.startVotingPhase(gameCode);
+    }
+
+    return true;
+  }
+
+  async submitVote(
+    gameCode: string,
+    playerId: string,
+    votedForPlayerId: string
+  ): Promise<boolean> {
+    const game = await this.redisService.getGame(gameCode);
+
+    if (!game || game.gameType !== "emojistory" || game.status !== "playing") {
+      return false;
+    }
+
+    const currentRound = game.rounds[game.currentRound - 1] as EmojiStoryRound;
+    if (!currentRound || currentRound.status !== "voting") {
+      return false;
+    }
+
+    // Can't vote for yourself
+    if (playerId === votedForPlayerId) {
+      return false;
+    }
+
+    // Check if votedForPlayerId exists and has an interpretation
+    if (!game.players.has(votedForPlayerId) || !currentRound.storyInterpretations.has(votedForPlayerId)) {
+      return false;
+    }
+
+    currentRound.votes.set(playerId, votedForPlayerId);
+    
+    await this.redisService.saveGame(game);
+
+    await this.redisService.publishToGame(gameCode, "voteReceived", {
+      playerId,
+      voteCount: currentRound.votes.size,
+      totalPlayers: game.players.size,
+    });
+
+    console.log(`🗳️ Vote submitted by ${playerId} for ${votedForPlayerId} in game ${gameCode}`);
+
+    // If all players have voted, end the round
+    if (currentRound.votes.size >= game.players.size) {
+      await this.endEmojiStoryRound(gameCode);
+    }
+
+    return true;
+  }
+
+  private async endInterpretationPhase(gameCode: string): Promise<void> {
+    const game = await this.redisService.getGame(gameCode);
+
+    if (!game || game.gameType !== "emojistory" || game.status !== "playing") {
+      return;
+    }
+
+    const currentRound = game.rounds[game.currentRound - 1] as EmojiStoryRound;
+    if (!currentRound || currentRound.status !== "interpreting") {
+      return;
+    }
+
+    await this.startVotingPhase(gameCode);
+  }
+
+  private async startVotingPhase(gameCode: string): Promise<void> {
+    const game = await this.redisService.getGame(gameCode);
+
+    if (!game || game.gameType !== "emojistory") {
+      return;
+    }
+
+    const currentRound = game.rounds[game.currentRound - 1] as EmojiStoryRound;
+    if (!currentRound) {
+      return;
+    }
+
+    currentRound.status = "voting";
+    
+    await this.redisService.saveGame(game);
+
+    const interpretations = Array.from(currentRound.storyInterpretations.entries()).map(([playerId, interpretation]) => ({
+      playerId,
+      nickname: game.players.get(playerId)?.nickname,
+      interpretation,
+    }));
+
+    await this.redisService.publishToGame(gameCode, "votingStarted", {
+      round: game.currentRound,
+      interpretations,
+      timeToVote: 45, // 45 seconds to vote
+    });
+
+    // Start voting timer
+    setTimeout(async () => {
+      await this.endEmojiStoryRound(gameCode);
+    }, 45000);
+  }
+
+  private async endEmojiStoryRound(gameCode: string): Promise<void> {
+    const game = await this.redisService.getGame(gameCode);
+
+    if (!game || game.gameType !== "emojistory" || game.status !== "playing") {
+      return;
+    }
+
+    const currentRound = game.rounds[game.currentRound - 1] as EmojiStoryRound;
+    if (!currentRound || currentRound.status !== "voting") {
+      return;
+    }
+
+    currentRound.status = "revealing";
+    currentRound.endedAt = new Date();
+
+    // Calculate scores based on votes received
+    const voteCount = new Map<string, number>();
+    for (const [_, votedForPlayerId] of currentRound.votes) {
+      voteCount.set(votedForPlayerId, (voteCount.get(votedForPlayerId) || 0) + 1);
+    }
+
+    // Award points: 2 points per vote received
+    for (const [playerId, votes] of voteCount) {
+      const points = votes * 2;
+      currentRound.scores.set(playerId, points);
+      
+      const player = game.players.get(playerId);
+      if (player) {
+        player.score += points;
+      }
+    }
+
+    await this.redisService.saveGame(game);
+
+    // Prepare results
+    const results = {
+      round: game.currentRound,
+      storyContributions: currentRound.storyContributions.map(sc => ({
+        playerId: sc.playerId,
+        nickname: game.players.get(sc.playerId)?.nickname,
+        emojis: sc.emojis,
+        turnOrder: sc.turnOrder,
+      })),
+      interpretations: Array.from(currentRound.storyInterpretations.entries()).map(([playerId, interpretation]) => ({
+        playerId,
+        nickname: game.players.get(playerId)?.nickname,
+        interpretation,
+        votes: voteCount.get(playerId) || 0,
+        points: currentRound.scores.get(playerId) || 0,
+      })),
+      votes: Array.from(currentRound.votes.entries()).map(([voterPlayerId, votedForPlayerId]) => ({
+        voterPlayerId,
+        voterNickname: game.players.get(voterPlayerId)?.nickname,
+        votedForPlayerId,
+        votedForNickname: game.players.get(votedForPlayerId)?.nickname,
+      })),
+      scores: Array.from(game.players.values())
+        .map((player) => ({
+          playerId: player.id,
+          nickname: player.nickname,
+          totalScore: player.score,
+        }))
+        .sort((a, b) => b.totalScore - a.totalScore),
+    };
+
+    await this.redisService.publishToGame(gameCode, "emojiStoryRoundResults", results);
+
+    console.log(`📊 EmojiStory round ${game.currentRound} completed for game ${gameCode}`);
+
+    // Wait 8 seconds before starting next round (longer to read results)
+    setTimeout(async () => {
+      await this.startNextRound(gameCode);
+    }, 8000);
+  }
+
+  // TwoTruths specific methods
+  async submitStatements(
+    gameCode: string,
+    playerId: string,
+    statements: Array<{ text: string; isLie: boolean }>
+  ): Promise<boolean> {
+    const game = await this.redisService.getGame(gameCode);
+
+    if (!game || game.gameType !== "twotruths" || game.status !== "playing") {
+      return false;
+    }
+
+    const currentRound = game.rounds[game.currentRound - 1] as TwoTruthsRound;
+    if (!currentRound || currentRound.status !== "waiting_for_statements") {
+      return false;
+    }
+
+    if (currentRound.currentPresenterPlayerId !== playerId) {
+      return false;
+    }
+
+    if (!statements || statements.length !== 3) {
+      return false;
+    }
+
+    // Validate statements
+    let lieCount = 0;
+    for (const statement of statements) {
+      if (!statement.text || statement.text.trim().length === 0 || statement.text.trim().length > 200) {
+        return false;
+      }
+      if (statement.isLie) lieCount++;
+    }
+
+    if (lieCount !== 1) {
+      return false; // Must have exactly one lie
+    }
+
+    // Save statements with generated IDs
+    currentRound.statements = statements.map((stmt, index) => ({
+      id: `${playerId}_${index}`,
+      text: stmt.text.trim(),
+      isLie: stmt.isLie,
+    }));
+
+    currentRound.status = "voting";
+    currentRound.startedAt = new Date();
+
+    await this.redisService.saveGame(game);
+
+    // Publish statements to all players (without the isLie flag for voters)
+    const publicStatements = currentRound.statements.map(stmt => ({
+      id: stmt.id,
+      text: stmt.text,
+    }));
+
+    await this.redisService.publishToGame(gameCode, "statementsReady", {
+      round: game.currentRound,
+      presenterPlayerId: playerId,
+      presenterNickname: game.players.get(playerId)?.nickname,
+      statements: publicStatements,
+      timeToVote: currentRound.timeToVote,
+    });
+
+    // Start voting timer
+    setTimeout(async () => {
+      await this.endTwoTruthsVoting(gameCode);
+    }, currentRound.timeToVote * 1000);
+
+    console.log(`📝 Statements submitted by ${playerId} in game ${gameCode}`);
+    return true;
+  }
+
+  async submitTwoTruthsVote(
+    gameCode: string,
+    playerId: string,
+    statementId: string
+  ): Promise<boolean> {
+    const game = await this.redisService.getGame(gameCode);
+
+    if (!game || game.gameType !== "twotruths" || game.status !== "playing") {
+      return false;
+    }
+
+    const currentRound = game.rounds[game.currentRound - 1] as TwoTruthsRound;
+    if (!currentRound || currentRound.status !== "voting") {
+      return false;
+    }
+
+    // Can't vote for your own statements
+    if (currentRound.currentPresenterPlayerId === playerId) {
+      return false;
+    }
+
+    // Validate statement ID exists
+    const statement = currentRound.statements.find(s => s.id === statementId);
+    if (!statement) {
+      return false;
+    }
+
+    currentRound.votes.set(playerId, statementId);
+    
+    await this.redisService.saveGame(game);
+
+    await this.redisService.publishToGame(gameCode, "voteReceived", {
+      playerId,
+      voteCount: currentRound.votes.size,
+      totalVoters: game.players.size - 1, // Excluding presenter
+    });
+
+    console.log(`🗳️ TwoTruths vote submitted by ${playerId} for statement ${statementId} in game ${gameCode}`);
+
+    // If all players have voted, end the round
+    const expectedVotes = game.players.size - 1; // Excluding presenter
+    if (currentRound.votes.size >= expectedVotes) {
+      await this.endTwoTruthsVoting(gameCode);
+    }
+
+    return true;
+  }
+
+  private async endTwoTruthsVoting(gameCode: string): Promise<void> {
+    const game = await this.redisService.getGame(gameCode);
+
+    if (!game || game.gameType !== "twotruths" || game.status !== "playing") {
+      return;
+    }
+
+    const currentRound = game.rounds[game.currentRound - 1] as TwoTruthsRound;
+    if (!currentRound || currentRound.status !== "voting") {
+      return;
+    }
+
+    currentRound.status = "revealing";
+    currentRound.endedAt = new Date();
+
+    // Find the lie statement
+    const lieStatement = currentRound.statements.find(s => s.isLie);
+    if (!lieStatement) {
+      return;
+    }
+
+    // Calculate scores
+    let presenterPoints = 0;
+    const voterPoints = new Map<string, number>();
+
+    // Count votes for each statement
+    const voteCount = new Map<string, number>();
+    for (const [_, statementId] of currentRound.votes) {
+      voteCount.set(statementId, (voteCount.get(statementId) || 0) + 1);
+    }
+
+    // Award points to voters who correctly identified the lie
+    for (const [voterId, votedStatementId] of currentRound.votes) {
+      if (votedStatementId === lieStatement.id) {
+        voterPoints.set(voterId, 3); // 3 points for guessing the lie correctly
+      } else {
+        voterPoints.set(voterId, 0);
+      }
+    }
+
+    // Award points to presenter based on how many people they fooled
+    const lieVotes = voteCount.get(lieStatement.id) || 0;
+    const totalVoters = game.players.size - 1;
+    const fooledCount = totalVoters - lieVotes;
+    presenterPoints = fooledCount * 2; // 2 points per person fooled
+
+    // Update scores
+    currentRound.scores.set(currentRound.currentPresenterPlayerId, presenterPoints);
+    for (const [playerId, points] of voterPoints) {
+      currentRound.scores.set(playerId, points);
+    }
+
+    // Update total scores
+    for (const [playerId, points] of currentRound.scores) {
+      const player = game.players.get(playerId);
+      if (player) {
+        player.score += points;
+      }
+    }
+
+    await this.redisService.saveGame(game);
+
+    // Prepare results
+    const results = {
+      round: game.currentRound,
+      presenterPlayerId: currentRound.currentPresenterPlayerId,
+      presenterNickname: game.players.get(currentRound.currentPresenterPlayerId)?.nickname,
+      statements: currentRound.statements.map(stmt => ({
+        id: stmt.id,
+        text: stmt.text,
+        isLie: stmt.isLie,
+        votes: voteCount.get(stmt.id) || 0,
+      })),
+      votes: Array.from(currentRound.votes.entries()).map(([voterId, statementId]) => ({
+        voterPlayerId: voterId,
+        voterNickname: game.players.get(voterId)?.nickname,
+        votedStatementId: statementId,
+        wasCorrect: statementId === lieStatement.id,
+      })),
+      scores: Array.from(currentRound.scores.entries()).map(([playerId, points]) => ({
+        playerId,
+        nickname: game.players.get(playerId)?.nickname,
+        roundPoints: points,
+      })),
+      totalScores: Array.from(game.players.values())
+        .map((player) => ({
+          playerId: player.id,
+          nickname: player.nickname,
+          totalScore: player.score,
+        }))
+        .sort((a, b) => b.totalScore - a.totalScore),
+    };
+
+    await this.redisService.publishToGame(gameCode, "twoTruthsRoundResults", results);
+
+    console.log(`📊 TwoTruths round ${game.currentRound} completed for game ${gameCode}`);
+
+    // Wait 8 seconds before starting next round
+    setTimeout(async () => {
+      await this.startNextRound(gameCode);
+    }, 8000);
   }
 }

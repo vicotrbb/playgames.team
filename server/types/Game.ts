@@ -1,3 +1,5 @@
+export type GameType = "guessio" | "emojistory" | "twotruths";
+
 export interface Player {
   id: string;
   nickname: string;
@@ -7,8 +9,16 @@ export interface Player {
   joinedAt: Date;
 }
 
-export interface GameRound {
+// Base round interface for common properties
+export interface BaseRound {
   roundNumber: number;
+  status: string;
+  startedAt?: Date;
+  endedAt?: Date;
+}
+
+// Guessio specific round
+export interface GuessioRound extends BaseRound {
   prompterId: string;
   prompt?: string;
   imageUrl?: string;
@@ -20,12 +30,53 @@ export interface GameRound {
     | "guessing"
     | "revealing"
     | "completed";
-  startedAt?: Date;
-  endedAt?: Date;
 }
+
+// EmojiStory specific round
+export interface EmojiStoryRound extends BaseRound {
+  storyContributions: Array<{
+    playerId: string;
+    emojis: string;
+    turnOrder: number;
+  }>;
+  storyInterpretations: Map<string, string>;
+  votes: Map<string, string>; // playerId -> votedForPlayerId
+  scores: Map<string, number>;
+  status:
+    | "waiting_for_turn"
+    | "story_building"
+    | "interpreting"
+    | "voting"
+    | "revealing"
+    | "completed";
+  currentTurnPlayerId?: string;
+  timePerTurn: number; // seconds
+}
+
+// TwoTruths specific round
+export interface TwoTruthsRound extends BaseRound {
+  currentPresenterPlayerId: string;
+  statements: Array<{
+    id: string;
+    text: string;
+    isLie: boolean;
+  }>;
+  votes: Map<string, string>; // voterPlayerId -> votedStatementId
+  scores: Map<string, number>;
+  status:
+    | "waiting_for_statements"
+    | "voting"
+    | "revealing"
+    | "completed";
+  timeToSubmit: number; // seconds
+  timeToVote: number; // seconds
+}
+
+export type GameRound = GuessioRound | EmojiStoryRound | TwoTruthsRound;
 
 export interface Game {
   code: string;
+  gameType: GameType;
   players: Map<string, Player>;
   rounds: GameRound[];
   currentRound: number;
@@ -35,7 +86,10 @@ export interface Game {
   updatedAt: Date;
   settings: {
     maxRounds: number;
-    guessingTimeLimit: number; // seconds
+    guessingTimeLimit?: number; // seconds (for Guessio)
+    timePerTurn?: number; // seconds (for EmojiStory)
+    timeToSubmitStatements?: number; // seconds (for TwoTruths)
+    timeToVote?: number; // seconds (for TwoTruths)
   };
 }
 

@@ -6,7 +6,7 @@ import { Input } from '@/components/ui/input'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { useSocket } from '@/lib/SocketContext'
-import { Player } from '@/lib/socket'
+import { Player } from '@/lib/SocketContext'
 import { Copy, Crown, Users, Play, MessageSquare, Send } from 'lucide-react'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import GamePlay from './GamePlay'
@@ -75,9 +75,20 @@ export default function GameLobby() {
       <div className="max-w-4xl mx-auto space-y-6">
         {/* Header */}
         <div className="text-center space-y-2">
-          <h1 className="text-3xl font-bold bg-gradient-to-r from-purple-600 to-blue-600 bg-clip-text text-transparent">
-            Game Lobby
-          </h1>
+          <div className="flex items-center justify-center space-x-3 mb-2">
+            <div className={`w-8 h-8 bg-gradient-to-br ${
+              gameState.gameType === 'guessio' 
+                ? 'from-purple-500 to-pink-500' 
+                : gameState.gameType === 'emojistory'
+                ? 'from-blue-500 to-cyan-500'
+                : 'from-green-500 to-teal-500'
+            } rounded-lg flex items-center justify-center text-white text-sm font-bold`}>
+              {gameState.gameType === 'guessio' ? '🎨' : gameState.gameType === 'emojistory' ? '📚' : '🕵️'}
+            </div>
+            <h1 className="text-3xl font-bold bg-gradient-to-r from-purple-600 to-blue-600 bg-clip-text text-transparent">
+              {gameState.gameType === 'guessio' ? 'Guessio' : gameState.gameType === 'emojistory' ? 'Emoji Story' : 'Two Truths and a Lie'} Lobby
+            </h1>
+          </div>
           <div className="flex items-center justify-center gap-2">
             <Badge variant="outline" className="text-lg px-4 py-2">
               {gameState.code}
@@ -150,7 +161,7 @@ export default function GameLobby() {
             <CardHeader>
               <CardTitle>Game Settings</CardTitle>
               <CardDescription>
-                Configure and start your Guessio game
+                Configure and start your {gameState.gameType === 'guessio' ? 'Guessio' : gameState.gameType === 'emojistory' ? 'Emoji Story' : 'Two Truths and a Lie'} game
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -159,10 +170,24 @@ export default function GameLobby() {
                   <span>Max Rounds:</span>
                   <span>{gameState.settings.maxRounds}</span>
                 </div>
-                <div className="flex justify-between text-sm">
-                  <span>Guessing Time:</span>
-                  <span>{gameState.settings.guessingTimeLimit}s</span>
-                </div>
+                {gameState.gameType === 'guessio' && gameState.settings.guessingTimeLimit && (
+                  <div className="flex justify-between text-sm">
+                    <span>Guessing Time:</span>
+                    <span>{gameState.settings.guessingTimeLimit}s</span>
+                  </div>
+                )}
+                {gameState.gameType === 'emojistory' && gameState.settings.timePerTurn && (
+                  <div className="flex justify-between text-sm">
+                    <span>Time Per Turn:</span>
+                    <span>{gameState.settings.timePerTurn}s</span>
+                  </div>
+                )}
+                {gameState.gameType === 'twotruths' && gameState.settings.timePerTurn && (
+                  <div className="flex justify-between text-sm">
+                    <span>Time Per Round:</span>
+                    <span>{gameState.settings.timePerTurn}s</span>
+                  </div>
+                )}
                 <div className="flex justify-between text-sm">
                   <span>Game Status:</span>
                   <Badge variant={gameState.status === 'lobby' ? 'secondary' : 'default'}>

@@ -15,7 +15,9 @@ const server = createServer(app);
 const io = new Server(server, {
   cors: {
     origin:
-      process.env.NODE_ENV === "production" ? "*" : ["http://localhost:3000"],
+      process.env.NODE_ENV === "production"
+        ? "https://playgames.team"
+        : ["http://localhost:3000"],
     methods: ["GET", "POST"],
   },
 });
@@ -24,7 +26,9 @@ const io = new Server(server, {
 app.use(
   cors({
     origin:
-      process.env.NODE_ENV === "production" ? "*" : "http://localhost:3000",
+      process.env.NODE_ENV === "production"
+        ? "https://playgames.team"
+        : "http://localhost:3000",
     credentials: true,
   })
 );
@@ -45,10 +49,14 @@ app.get("/health", (req, res) => {
 // Game API endpoints
 app.post("/api/create-game", async (req, res) => {
   try {
-    const { hostNickname } = req.body;
+    const { hostNickname, gameType = "guessio" } = req.body;
 
     if (!hostNickname || hostNickname.trim().length === 0) {
       return res.status(400).json({ error: "Host nickname is required" });
+    }
+
+    if (!["guessio", "emojistory", "twotruths"].includes(gameType)) {
+      return res.status(400).json({ error: "Invalid game type" });
     }
 
     const gameCode = generateGameCode();
@@ -57,7 +65,8 @@ app.post("/api/create-game", async (req, res) => {
     const game = await gameService.createGame(
       gameCode,
       hostId,
-      hostNickname.trim()
+      hostNickname.trim(),
+      gameType
     );
 
     // Set session cookie for the host

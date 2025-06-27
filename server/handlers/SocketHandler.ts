@@ -277,6 +277,138 @@ export class SocketHandler {
         socket.emit("error", { message: "Failed to submit guess" });
       }
     });
+
+    // EmojiStory handlers
+    socket.on("submitEmojis", async (data: { emojis: string }) => {
+      try {
+        const socketData = socket.data as SocketData;
+        if (!socketData.gameCode || !socketData.playerId) {
+          socket.emit("error", { message: "Not connected to a game" });
+          return;
+        }
+
+        const success = await this.gameService.submitEmojis(
+          socketData.gameCode,
+          socketData.playerId,
+          data.emojis
+        );
+
+        if (!success) {
+          socket.emit("error", { message: "Failed to submit emojis" });
+          return;
+        }
+
+        socket.emit("emojisSubmitted", { success: true });
+      } catch (error) {
+        console.error("Error submitting emojis:", error);
+        socket.emit("error", { message: "Failed to submit emojis" });
+      }
+    });
+
+    socket.on("submitStoryInterpretation", async (data: { interpretation: string }) => {
+      try {
+        const socketData = socket.data as SocketData;
+        if (!socketData.gameCode || !socketData.playerId) {
+          socket.emit("error", { message: "Not connected to a game" });
+          return;
+        }
+
+        const success = await this.gameService.submitStoryInterpretation(
+          socketData.gameCode,
+          socketData.playerId,
+          data.interpretation
+        );
+
+        if (!success) {
+          socket.emit("error", { message: "Failed to submit interpretation" });
+          return;
+        }
+
+        socket.emit("interpretationSubmitted", { success: true });
+      } catch (error) {
+        console.error("Error submitting interpretation:", error);
+        socket.emit("error", { message: "Failed to submit interpretation" });
+      }
+    });
+
+    socket.on("submitVote", async (data: { votedForPlayerId: string }) => {
+      try {
+        const socketData = socket.data as SocketData;
+        if (!socketData.gameCode || !socketData.playerId) {
+          socket.emit("error", { message: "Not connected to a game" });
+          return;
+        }
+
+        const success = await this.gameService.submitVote(
+          socketData.gameCode,
+          socketData.playerId,
+          data.votedForPlayerId
+        );
+
+        if (!success) {
+          socket.emit("error", { message: "Failed to submit vote" });
+          return;
+        }
+
+        socket.emit("voteSubmitted", { success: true });
+      } catch (error) {
+        console.error("Error submitting vote:", error);
+        socket.emit("error", { message: "Failed to submit vote" });
+      }
+    });
+
+    // TwoTruths handlers
+    socket.on("submitStatements", async (data: { statements: Array<{ text: string; isLie: boolean }> }) => {
+      try {
+        const socketData = socket.data as SocketData;
+        if (!socketData.gameCode || !socketData.playerId) {
+          socket.emit("error", { message: "Not connected to a game" });
+          return;
+        }
+
+        const success = await this.gameService.submitStatements(
+          socketData.gameCode,
+          socketData.playerId,
+          data.statements
+        );
+
+        if (!success) {
+          socket.emit("error", { message: "Failed to submit statements" });
+          return;
+        }
+
+        socket.emit("statementsSubmitted", { success: true });
+      } catch (error) {
+        console.error("Error submitting statements:", error);
+        socket.emit("error", { message: "Failed to submit statements" });
+      }
+    });
+
+    socket.on("submitTwoTruthsVote", async (data: { statementId: string }) => {
+      try {
+        const socketData = socket.data as SocketData;
+        if (!socketData.gameCode || !socketData.playerId) {
+          socket.emit("error", { message: "Not connected to a game" });
+          return;
+        }
+
+        const success = await this.gameService.submitTwoTruthsVote(
+          socketData.gameCode,
+          socketData.playerId,
+          data.statementId
+        );
+
+        if (!success) {
+          socket.emit("error", { message: "Failed to submit vote" });
+          return;
+        }
+
+        socket.emit("twoTruthsVoteSubmitted", { success: true });
+      } catch (error) {
+        console.error("Error submitting TwoTruths vote:", error);
+        socket.emit("error", { message: "Failed to submit vote" });
+      }
+    });
   }
 
   async broadcastToGame(gameCode: string, event: string, data: any) {
@@ -286,6 +418,7 @@ export class SocketHandler {
   private serializeGameForClient(game: any) {
     return {
       code: game.code,
+      gameType: game.gameType,
       players: Array.from(game.players.values()).map((player: any) => ({
         id: player.id,
         nickname: player.nickname,
