@@ -426,7 +426,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
           data.hostId
         );
         socket.emit("joinGame", {
-          gameCode: data.gameCode,
+          gameCode: data.gameCode.toUpperCase(),
           playerId: data.hostId,
         });
       };
