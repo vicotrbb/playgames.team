@@ -176,13 +176,28 @@ export class RedisService {
   private serializeGame(game: Game): Record<string, string> {
     return {
       code: game.code,
+      gameType: game.gameType,
       players: JSON.stringify(Array.from(game.players.entries())),
       rounds: JSON.stringify(
-        game.rounds.map((round) => ({
-          ...round,
-          guesses: Array.from(round.guesses.entries()),
-          scores: Array.from(round.scores.entries()),
-        }))
+        game.rounds.map((round) => {
+          const serializedRound: any = { ...round };
+          
+          // Handle different round types with their specific Map properties
+          if ('guesses' in round && round.guesses instanceof Map) {
+            serializedRound.guesses = Array.from(round.guesses.entries());
+          }
+          if ('scores' in round && round.scores instanceof Map) {
+            serializedRound.scores = Array.from(round.scores.entries());
+          }
+          if ('votes' in round && round.votes instanceof Map) {
+            serializedRound.votes = Array.from(round.votes.entries());
+          }
+          if ('storyInterpretations' in round && round.storyInterpretations instanceof Map) {
+            serializedRound.storyInterpretations = Array.from(round.storyInterpretations.entries());
+          }
+          
+          return serializedRound;
+        })
       ),
       currentRound: game.currentRound.toString(),
       status: game.status,
@@ -202,16 +217,33 @@ export class RedisService {
       });
     });
 
-    const rounds = JSON.parse(data.rounds).map((round: any) => ({
-      ...round,
-      guesses: new Map(round.guesses),
-      scores: new Map(round.scores),
-      startedAt: round.startedAt ? new Date(round.startedAt) : undefined,
-      endedAt: round.endedAt ? new Date(round.endedAt) : undefined,
-    }));
+    const rounds = JSON.parse(data.rounds).map((round: any) => {
+      const deserializedRound: any = {
+        ...round,
+        startedAt: round.startedAt ? new Date(round.startedAt) : undefined,
+        endedAt: round.endedAt ? new Date(round.endedAt) : undefined,
+      };
+      
+      // Handle different round types with their specific Map properties
+      if (round.guesses && Array.isArray(round.guesses)) {
+        deserializedRound.guesses = new Map(round.guesses);
+      }
+      if (round.scores && Array.isArray(round.scores)) {
+        deserializedRound.scores = new Map(round.scores);
+      }
+      if (round.votes && Array.isArray(round.votes)) {
+        deserializedRound.votes = new Map(round.votes);
+      }
+      if (round.storyInterpretations && Array.isArray(round.storyInterpretations)) {
+        deserializedRound.storyInterpretations = new Map(round.storyInterpretations);
+      }
+      
+      return deserializedRound;
+    });
 
     return {
       code: data.code,
+      gameType: data.gameType as Game["gameType"],
       players,
       rounds,
       currentRound: parseInt(data.currentRound),
